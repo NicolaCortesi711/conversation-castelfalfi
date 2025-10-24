@@ -32,29 +32,51 @@ $db_user = 'castelfalfiaiass_chatbot';
 $db_pass = '1m0qS[jr?xed';
 
 // === FUNZIONI DI FORMATTAZIONE ===
+define('LINK_STYLE', 'color:#3565A7;text-decoration:underline;');
+
 function convertLinksToHtml($text) {
     if (!$text) return '';
+
+    // 🧹 Rimuove riferimenti tipo [#Document4] o [#Document123]
+    $text = preg_replace('/\[#Document\d+\]/i', '', $text);
 
     // Unity-style <link="">
     $text = preg_replace_callback('/<link="(.*?)">(.*?)<\/link>/i', function ($m) {
         $url = htmlspecialchars_decode($m[1]);
-        return '<a href="' . htmlspecialchars($url, ENT_QUOTES) . '" target="_blank" rel="noopener noreferrer" style="color:#3565A7;text-decoration:underline;">link</a>';
+        return '<a href="' . htmlspecialchars($url, ENT_QUOTES) . '" target="_blank" rel="noopener noreferrer" style="' . LINK_STYLE . '">link</a>';
     }, $text);
 
     // Markdown-style [label](url)
     $text = preg_replace_callback('/\[(.*?)\]\((https?:\/\/[^)]+)\)/i', function ($m) {
         $label = trim($m[1]);
         $url = trim($m[2]);
-
-        if (filter_var($label, FILTER_VALIDATE_URL)) {
-            $label = 'link';
-        }
-
-        return '<a href="' . htmlspecialchars($url, ENT_QUOTES) . '" target="_blank" rel="noopener noreferrer" style="color:#3565A7;text-decoration:underline;">' 
-               . htmlspecialchars($label, ENT_QUOTES) . '</a>';
+        if (filter_var($label, FILTER_VALIDATE_URL)) $label = 'link';
+        return '<a href="' . htmlspecialchars($url, ENT_QUOTES) . '" target="_blank" rel="noopener noreferrer" style="' . LINK_STYLE . '">' 
+             . htmlspecialchars($label, ENT_QUOTES) . '</a>';
     }, $text);
 
-    return trim($text);
+    // Plain URLs (es: https://example.com)
+    $text = preg_replace_callback(
+        '/(?<!href="|">)(https?:\/\/[^\s<>"\'\)]+)/i',
+        function ($m) {
+            $url = trim($m[1]);
+            return '<a href="' . htmlspecialchars($url, ENT_QUOTES) . '" target="_blank" rel="noopener noreferrer" style="' . LINK_STYLE . '">link</a>';
+        },
+        $text
+    );
+
+    // Telefoni già linkati → ripulisce testo visibile
+    $text = preg_replace_callback(
+        '/<a\s+href="tel:([^"]+)"[^>]*>(.*?)<\/a>/i',
+        function ($m) {
+            $href = $m[1];
+            $label = preg_replace('/[^\d+]/', '', $m[2]);
+            return '<a href="tel:' . htmlspecialchars($href, ENT_QUOTES) . '" style="' . LINK_STYLE . '">' . $label . '</a>';
+        },
+        $text
+    );
+
+    return $text;
 }
 
 function formatEmails($text) {
