@@ -1,120 +1,157 @@
 <?php
+// === DEBUG TEMPORANEO ===
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+ini_set('log_errors', 1);
+ini_set('error_log', __DIR__ . '/error_log.txt');
+
+// === CORS SEMPLIFICATO ===
+header("Access-Control-Allow-Origin: http://localhost:5173");
+header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
+header("Access-Control-Allow-Headers: Content-Type, X-Api-Key");
+header("Access-Control-Allow-Credentials: true");
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
 header('Content-Type: application/json');
 session_start();
 
-// CONFIG API
-$API_URL = 'https://cubebotcorewebapi.azurewebsites.net/ChatbotLive/GetResponseFromBot?';
+// === CONFIG API ===
+$API_URL = 'https://cubebotcorewebapi2.azurewebsites.net/ChatbotLive/GetResponseFromBot?';
 $API_KEY = 'ET_HFIHJDl1ufYWn3rDtDUvTNpJGC1FVu';
 $BOT_GUID = 'd8e83ed2-652d-432c-b3c7-6e2b9ae6956f';
 
-// CONFIG DB
+// === CONFIG DB ===
 $db_host = 'localhost';
 $db_name = 'castelfalfiaiass_chatbot';
 $db_user = 'castelfalfiaiass_chatbot';
 $db_pass = '1m0qS[jr?xed';
 
-// Funzione per sostituire l’URL target e rimuovere citazioni numeriche [1], [2]
-function formatResult($text) {
-    $targetUrl = 'https://be.synxis.com/?Hotel=76199';
-    $newText   = 'https://booking.castelfalfi.com';
+// === FUNZIONI DI FORMATTAZIONE ===
+define('LINK_STYLE', 'color:#3565A7;text-decoration:underline;');
 
-    $q = preg_quote($targetUrl, '/');
+function convertLinksToHtml($text) {
+    if (!$text) return '';
+    $text = preg_replace('/\[#Document\d+\]/i', '', $text);
+    $text = preg_replace_callback('/<link="(.*?)">(.*?)<\/link>/i', function ($m) {
+        $url = htmlspecialchars_decode($m[1]);
+        return '<a href="' . htmlspecialchars($url, ENT_QUOTES) . '" target="_blank" rel="noopener noreferrer" style="' . LINK_STYLE . '">link</a>';
+    }, $text);
+    $text = preg_replace_callback('/\[(.*?)\]\((https?:\/\/[^)]+)\)/i', function ($m) {
+        $label = trim($m[1]);
+        $url = trim($m[2]);
+        if (filter_var($label, FILTER_VALIDATE_URL)) $label = 'link';
+        return '<a href="' . htmlspecialchars($url, ENT_QUOTES) . '" target="_blank" rel="noopener noreferrer" style="' . LINK_STYLE . '">' . htmlspecialchars($label, ENT_QUOTES) . '</a>';
+    }, $text);
+    $text = preg_replace_callback('/(?<!href="|">)(https?:\/\/[^\s<>"\'\)]+)/i', function ($m) {
+        $url = trim($m[1]);
+        return '<a href="' . htmlspecialchars($url, ENT_QUOTES) . '" target="_blank" rel="noopener noreferrer" style="' . LINK_STYLE . '">link</a>';
+    }, $text);
+    $text = preg_replace_callback('/<a\s+href="tel:([^"]+)"[^>]*>(.*?)<\/a>/i', function ($m) {
+        $href = $m[1];
+        $label = preg_replace('/[^\d+]/', '', $m[2]);
+        return '<a href="tel:' . htmlspecialchars($href, ENT_QUOTES) . '" style="' . LINK_STYLE . '">' . $label . '</a>';
+    }, $text);
+    return $text;
+}
 
-    $pattern = '/\[\s*<?\s*' . $q . '\s*>?\s*\]\(\s*<?\s*' . $q . '\s*>?\s*\)/i';
-    $replacement = '[' . $newText . '](' . $targetUrl . ')';
-    $text = preg_replace($pattern, $replacement, $text);
+function formatEmails($text) {
+    return preg_replace_callback('/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/i', function ($m) {
+        $email = $m[0];
+        return '<a href="mailto:' . $email . '" style="' . LINK_STYLE . '">' . $email . '</a>';
+    }, $text);
+}
 
-    $text = preg_replace('/\s*\[\d+\]\s*/', ' ', $text);
-    $text = preg_replace('/[ \t]+/', ' ', $text);
-    $text = preg_replace('/\s+([.,;:!?])/', '$1', $text);
+function formatPhones($text) {
+    return preg_replace_callback('/\+?\s*(?:\d[\s\-]*){7,}\d/', function ($m) {
+        $phone = trim($m[0]);
+        $compact = preg_replace('/[\s\-]+/', '', $phone);
+        return '<a href="tel:' . $compact . '" style="' . LINK_STYLE . '">' . $phone . '</a>';
+    }, $text);
+}
 
+function cleanText($text) {
+    $text = preg_replace(['/\\[\\d+\\]/', '/[ \\t]+/', '/\\s+([.,;:!?])/', '/\\s{2,}/'], ['', ' ', '$1', ' '], $text);
     return trim($text);
 }
 
 function formatElevenLabs($text) {
-    $targetUrl = 'https://be.synxis.com/?Hotel=76199';
-    $newUrl    = 'https://booking.castelfalfi.com';
-
-    // 1. Rimuovi citazioni numeriche tipo [1]
+    if (!$text) return '';
     $text = preg_replace('/\[\d+\]/', '', $text);
-
-    // 2. Trasforma i link markdown tenendo solo il contenuto tra []
-    $text = preg_replace_callback('/\[(.*?)\]\(.*?\)/', function ($matches) use ($targetUrl, $newUrl) {
-        $label = trim($matches[1]);
-        // Se il contenuto nelle [] è il target, sostituiscilo con il nuovo
-        if ($label === $targetUrl) {
-            return $newUrl;
-        }
-        return $label;
+    $text = preg_replace_callback('/\[(.*?)\]\((https?:\/\/[^)]+)\)/', function ($m) {
+        return trim($m[1]) ?: 'link';
     }, $text);
-
-    // 3. Normalizza spazi
-    $text = preg_replace('/\s+/', ' ', $text);
-
+    $text = preg_replace('/https?:\/\/\S+/i', 'link', $text);
+    $text = strip_tags($text);
+    $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5);
+    $text = preg_replace('/\s{2,}/', ' ', $text);
     return trim($text);
 }
 
-// funzione: trova email e le trasforma in [email](email)
-function formatEmails($text) {
-    $pattern = '/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/i';
-    return preg_replace_callback($pattern, function ($matches) {
-        $email = $matches[0];
-        return "[$email]($email)";
-    }, $text);
+function convertHtmlLinksToMarkdown($text) {
+    return preg_replace_callback(
+        '/<a\s+href=["\']([^"\']+)["\'][^>]*>(.*?)<\/a>/i',
+        function ($m) {
+            $url = html_entity_decode(trim($m[1]));
+            $label = strip_tags(trim($m[2]));
+            return '[' . ($label ?: $url) . '](' . $url . ')';
+        },
+        $text
+    );
 }
 
-// funzione: trova numeri di telefono anche con spazi e li trasforma in [numero](numero)
-function formatPhones($text) {
-    // regex: +, cifre, spazi o trattini, almeno 7-8 caratteri
-    $pattern = '/\+?\s*(?:\d[\s\-]*){7,}\d/';
-    return preg_replace_callback($pattern, function ($matches) {
-        $phone = trim($matches[0]);
-        // numero compatto: tolgo spazi e trattini
-        $compact = preg_replace('/[\s\-]+/', '', $phone);
-        return "[$compact]($compact)";
-    }, $text);
+function htmlToMarkdownClean($text) {
+    $text = convertHtmlLinksToMarkdown($text);
+    $text = preg_replace('/<br\s*\/?>/i', "\n", $text);
+    $text = strip_tags($text);
+    $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5);
+    return trim($text);
 }
 
-// Autenticazione via header personalizzato X-Api-Key
+// === AUTENTICAZIONE ===
 $headers = getallheaders();
 $clientKey = $headers['X-Api-Key'] ?? '';
-
 if (trim($clientKey) !== $API_KEY) {
     http_response_code(401);
     echo json_encode(["error" => "Unauthorized"]);
     exit;
 }
 
-// Legge il corpo POST in formato JSON grezzo
+// === INPUT ===
 $rawBody = file_get_contents("php://input");
 $input = json_decode($rawBody, true);
+if (!is_array($input)) {
+    http_response_code(400);
+    echo json_encode(["error" => "Invalid JSON"]);
+    exit;
+}
 
-// Estrazione dati con fallback a stringa vuota
-$quesion = isset($input['chatText']) ? trim($input['chatText']) : '';
-$language = isset($input['language']) && $input['language'] !== null ? trim($input['language']) : '';
-$origin = isset($input['origin']) && $input['origin'] !== null ? trim($input['origin']) : '';
-$conversationId = $input['conversationId'] ?? null;
-$threadId = isset($input['threadId']) && $input['threadId'] !== null ? trim($input['threadId']) : '';
+$quesion = trim($input['chatText'] ?? '');
+$language = trim($input['language'] ?? '');
+$origin = trim($input['origin'] ?? '');
+$threadId = trim($input['threadId'] ?? '');
+$chat_conversation_uuid = trim($input['chat_conversation_uuid'] ?? '');
 
-// Validazione
-if (!$quesion) {
+if ($quesion === '') {
     http_response_code(400);
     echo json_encode(["error" => "Messaggio mancante"]);
     exit;
 }
 
-// Costruzione URL dell'API bot
-$url = $API_URL . "chatbotUuid=" . $BOT_GUID;
-if ($conversationId) {
-    $url .= "&conversationUuid=" . urlencode($conversationId);
+// === LOG (debug) ===
+error_log("­ЪДа chat_conversation_uuid ricevuto: " . ($chat_conversation_uuid ?: '(vuoto)'));
+
+// === RICHIESTA AL BOT ===
+$url = $API_URL . "chatbotUuid=" . urlencode($BOT_GUID);
+if (!empty($chat_conversation_uuid)) {
+    $url .= "&conversationUuid=" . urlencode($chat_conversation_uuid);
 }
 
-// Prepara la richiesta verso il bot
-$bodyArr = ["chatText" => $quesion];
-if ($conversationId) {
-    $bodyArr["conversationId"] = $conversationId;
-}
-$body = json_encode($bodyArr);
+$body = json_encode(["chatText" => $quesion]);
 
 $options = [
     'http' => [
@@ -129,87 +166,77 @@ $options = [
     ]
 ];
 
-$context = stream_context_create($options);
-$response = file_get_contents($url, false, $context);
+$response = file_get_contents($url, false, stream_context_create($options));
 
-// Controllo immediato di errore
 if ($response === false) {
     http_response_code(502);
-    echo json_encode([
-        "error" => "Errore nella comunicazione con il bot.",
-        "details" => error_get_last()
-    ]);
+    echo json_encode(["error" => "Errore nella comunicazione con il bot."]);
     exit;
 }
 
-// Estraggo risposta del bot (testo)
 $responseDecoded = json_decode($response, true);
-$botResponse = $responseDecoded['BotMessageResponse']['result'] ?? null;
+if (!is_array($responseDecoded)) {
+    http_response_code(502);
+    echo json_encode(["error" => "Risposta non valida dal bot"]);
+    exit;
+}
 
-// Applica la formattazione personalizzata
+// === Ricava risposta bot e UUID ===
+$botResponse = $responseDecoded['BotMessageResponse']['result'] ?? ($responseDecoded['result'] ?? null);
+$newUuid = $responseDecoded['BotMessageResponse']['chat_conversation_uuid'] ?? ($responseDecoded['chat_conversation_uuid'] ?? '');
+
+// Log confronto valori
+error_log("­Ъњг chat_conversation_uuid restituito da CubeBot: " . ($newUuid ?: '(vuoto)'));
+
+// === FORMATTAZIONE TESTO ===
 $elevenLabsText = '';
+$markdownText = '';
 if ($botResponse) {
-    $botResponseFormatted = formatResult($botResponse);
+    $botResponseFormatted = cleanText($botResponse);
     $botResponseFormatted = formatEmails($botResponseFormatted);
     $botResponseFormatted = formatPhones($botResponseFormatted);
+    $botResponseFormatted = convertLinksToHtml($botResponseFormatted);
+    $markdownText = htmlToMarkdownClean($botResponseFormatted);
     $elevenLabsText = formatElevenLabs($botResponse);
-
-    // aggiorno il campo result
     $responseDecoded['BotMessageResponse']['result'] = $botResponseFormatted;
 }
 
-// ✅ Ripulisce tutte le stringhe del JSON
-if (is_array($responseDecoded)) {
-    array_walk_recursive($responseDecoded, function (&$value) {
-        if (is_string($value)) {
-            $value = preg_replace('/\[\d+\]/', '', $value);
-            $value = preg_replace('/\s+/', ' ', $value);
-            $value = trim($value);
-        }
-    });
+$responseDecoded['textElevenLabs'] = $elevenLabsText;
+$responseDecoded['textMarkdown'] = $markdownText;
 
-    // aggiungo anche textElevenLabs
-    $responseDecoded['textElevenLabs'] = $elevenLabsText ?? '';
+// === RISPONDE AL FRONTEND ===
+$responseDecoded['chat_conversation_uuid'] = $newUuid;
+
+// === LOG SU FILE ===
+try {
+    $jsonFile = __DIR__ . '/bot_full_response.json';
+    $timestamp = date('Y-m-d H:i:s');
+    $dataToSave = "=== " . $timestamp . " ===\n" .
+                  json_encode($responseDecoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) .
+                  "\n\n";
+    file_put_contents($jsonFile, $dataToSave, FILE_APPEND | LOCK_EX);
+} catch (Exception $e) {
+    error_log("Errore salvataggio JSON: " . $e->getMessage());
 }
 
-// Salvataggio su file (debug)
-file_put_contents(__DIR__ . '/risposta.txt', $response);
-
-// Salva su DB
+// === SALVATAGGIO SU DATABASE ===
 try {
     $pdo = new PDO("mysql:host=$db_host;dbname=$db_name;charset=utf8mb4", $db_user, $db_pass);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-
     $stmt = $pdo->prepare("
         INSERT INTO chat (chat_id, language, origin, quesion, response)
         VALUES (:chat_id, :language, :origin, :quesion, :response)
     ");
-
     $stmt->execute([
         ':chat_id' => $threadId,
         ':language' => $language,
         ':origin' => $origin,
         ':quesion' => $quesion,
-        ':response' => $responseDecoded['BotMessageResponse']['result'] ?? $botResponse
+        ':response' => $responseDecoded['BotMessageResponse']['result'] ?? ''
     ]);
 } catch (PDOException $e) {
-    http_response_code(500);
-    echo json_encode(["error" => "Errore DB: " . $e->getMessage()]);
-    exit;
+    error_log("DB Error: " . $e->getMessage());
 }
 
-// Preparo la risposta finale da inviare al client
-$response = json_encode($responseDecoded, JSON_UNESCAPED_UNICODE);
-
-// Imposto il codice HTTP in base a header remoto (se esiste)
-if (isset($http_response_header[0])) {
-    $statusParts = explode(" ", $http_response_header[0]);
-    if (isset($statusParts[1]) && is_numeric($statusParts[1])) {
-        http_response_code((int)$statusParts[1]);
-    }
-}
-
-echo $response;
-
-// Salvataggio anche del JSON arricchito e ripulito (debug)
-file_put_contents(__DIR__ . '/risp.txt', $response);
+// === OUTPUT ===
+echo json_encode($responseDecoded, JSON_UNESCAPED_UNICODE);
